@@ -1,0 +1,11 @@
+name: self-audit
+on: [push]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v4, pinned
+      - name: ci-audit itself
+        run: python3 ci_audit.py . --severity-threshold high

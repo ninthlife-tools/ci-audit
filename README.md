@@ -39,6 +39,18 @@ Exit codes: `0` clean at the threshold, `1` findings, `2` bad usage.
   fix so triage is fast.
 - Not a substitute for GitHub's native controls — it complements them.
 
+## Use it as a GitHub Action
+
+```yaml
+- uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v4, SHA-pinned
+- uses: ninthlife-tools/ci-audit@master
+  with:
+    severity-threshold: high
+```
+
+No Marketplace listing needed — actions run straight from repos. (A
+Marketplace listing needs a publisher agreement, a human step on our side.)
+
 ## Tests
 
 ```bash

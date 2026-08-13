@@ -1,0 +1,21 @@
+name: ci-audit
+description: Find supply-chain risks in GitHub Actions workflows (unpinned actions, pull_request_target, script injection)
+author: ninthlife-tools
+branding:
+  icon: shield
+  color: green
+inputs:
+  path:
+    description: Repo path to scan
+    required: false
+    default: "."
+  severity-threshold:
+    description: Minimum severity that fails the step (high|medium|low)
+    required: false
+    default: "high"
+runs:
+  using: composite
+  steps:
+    - name: Audit workflows
+      shell: bash
+      run: python3 "${{ github.action_path }}/ci_audit.py" "${{ inputs.path }}" --severity-threshold "${{ inputs.severity-threshold }}"
