@@ -14,10 +14,46 @@ interpolated into shell commands.
 python3 ci_audit.py                  # scan ./.github/workflows (or any yml in cwd)
 python3 ci_audit.py ~/code/myrepo    # scan another repo
 python3 ci_audit.py --json           # machine-readable output
+python3 ci_audit.py --format sarif   # SARIF 2.1.0 for code-scanning dashboards
 python3 ci_audit.py --severity-threshold medium   # exit 1 on medium+ too
 ```
 
 Exit codes: `0` clean at the threshold, `1` findings, `2` bad usage.
+
+## SARIF output
+
+`--format sarif` emits SARIF 2.1.0 — one run, full rule metadata, and one
+result per finding — for GitHub code scanning and other SARIF viewers:
+
+```bash
+python3 ci_audit.py --format sarif > results.sarif
+# then: github/codeql-action/upload-sarif with sarif_file: results.sarif
+```
+
+```json
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {"driver": {"name": "ci-audit", "rules": [...]}},
+      "results": [
+        {
+          "ruleId": "unpinned-action",
+          "level": "error",
+          "message": {"text": "action referenced by tag/branch, not a commit SHA — fix: ..."},
+          "locations": [{"physicalLocation": {
+            "artifactLocation": {"uri": ".github/workflows/ci.yml"},
+            "region": {"startLine": 9}
+          }}]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Severity mapping: high → `error`, medium → `warning`, low → `note`.
+URIs are repo-relative when ci-audit runs from the repo root.
 
 ## Rules
 
@@ -61,7 +97,7 @@ python3 -m unittest -v
 
 - GitHub Action packaging (`action.yml`, Marketplace) — requires a publisher
   agreement, i.e. a human step
-- SARIF output for code-scanning dashboards
+- ~~SARIF output for code-scanning dashboards~~ (shipped: `--format sarif`)
 - Autofix suggestions
 
 ## Business context

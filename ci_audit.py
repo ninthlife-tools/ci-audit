@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3}
+SARIF_LEVELS = {"high": "error", "medium": "warning", "low": "note"}
 
 RULES = {
     "unpinned-action": {
@@ -141,10 +142,107 @@ def meets_threshold(finding: dict, threshold: str) -> bool:
     return SEVERITY_ORDER[finding["severity"]] >= SEVERITY_ORDER[threshold]
 
 
+SARIF_LEVELS = {"high": "error", "medium": "warning", "low": "note"}
+
+
+def to_sarif(findings: list) -> dict:
+    return {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "ci-audit",
+                        "rules": [
+                            {
+                                "id": rule_id,
+                                "name": rule_id,
+                                "shortDescription": {"text": rule["message"]},
+                                "defaultConfiguration": {"level": SARIF_LEVELS[rule["severity"]]},
+                            }
+                            for rule_id, rule in RULES.items()
+                        ],
+                    }
+                },
+                "results": [
+                    {
+                        "ruleId": finding["rule"],
+                        "level": SARIF_LEVELS[finding["severity"]],
+                        "message": {"text": f"{finding['message']} — fix: {finding['fix']}"},
+                        "locations": [
+                            {
+                                "physicalLocation": {
+                                    "artifactLocation": {"uri": finding["file"]},
+                                    "region": {"startLine": finding["line"]},
+                                }
+                            }
+                        ],
+                    }
+                    for finding in findings
+                ],
+            }
+        ],
+    }
+
+
+def sarif_uri(file_str: str) -> str:
+    # SARIF viewers resolve uris against the repo root; in practice ci-audit
+    # runs from the checkout, so cwd-relative is repo-relative
+    path = Path(file_str)
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def sarif_result(finding: dict) -> dict:
+    return {
+        "ruleId": finding["rule"],
+        "level": SARIF_LEVELS[finding["severity"]],
+        "message": {"text": f"{finding['message']} — fix: {finding['fix']}"},
+        "locations": [
+            {
+                "physicalLocation": {
+                    "artifactLocation": {"uri": sarif_uri(finding["file"])},
+                    "region": {"startLine": finding["line"]},
+                }
+            }
+        ],
+    }
+
+
+def to_sarif(findings: list) -> dict:
+    return {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "ci-audit",
+                        "rules": [
+                            {
+                                "id": rule_id,
+                                "name": "".join(part.capitalize() for part in rule_id.split("-")),
+                                "shortDescription": {"text": rule["message"]},
+                                "defaultConfiguration": {"level": SARIF_LEVELS[rule["severity"]]},
+                            }
+                            for rule_id, rule in RULES.items()
+                        ],
+                    }
+                },
+                "results": [sarif_result(finding) for finding in findings],
+            }
+        ],
+    }
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("paths", nargs="*", default=["."], help="workflow files, repos, or dirs (default: current dir)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument("--format", choices=["text", "sarif"], default="text", help="output format (default: text)")
     parser.add_argument("--severity-threshold", default="high", choices=list(SEVERITY_ORDER),
                         help="minimum severity that triggers exit 1 (default: high)")
     args = parser.parse_args(argv)
@@ -161,7 +259,9 @@ def main(argv=None) -> int:
     for path in files:
         findings.extend(scan_workflow(path))
 
-    if args.json:
+    if args.format == "sarif":
+        print(json.dumps(to_sarif(findings), indent=2))
+    elif args.json:
         print(json.dumps(findings, indent=2))
     else:
         for f in findings:

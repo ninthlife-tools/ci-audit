@@ -68,6 +68,13 @@ class CiAuditTest(unittest.TestCase):
         path = self.write_workflow(content)
         return ci_audit.scan_workflow(path)
 
+    def run_sarif(self, content: str = BAD_WORKFLOW) -> dict:
+        self.write_workflow(content)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ci_audit.main([str(self.root), "--format", "sarif"])
+        return json.loads(out.getvalue())
+
     def test_clean_workflow_has_no_findings(self):
         self.assertEqual(self.scan(CLEAN_WORKFLOW), [])
 
@@ -123,6 +130,77 @@ class CiAuditTest(unittest.TestCase):
             ci_audit.main([str(self.root), "--json"])
         parsed = json.loads(out.getvalue())
         self.assertTrue(any(f["rule"] == "unpinned-action" for f in parsed))
+
+    def test_sarif_output_parses(self):
+        parsed = self.run_sarif()
+        self.assertEqual(parsed["version"], "2.1.0")
+        self.assertEqual(len(parsed["runs"]), 1)
+
+    def test_sarif_required_keys_present(self):
+        run = self.run_sarif()["runs"][0]
+        self.assertEqual(run["tool"]["driver"]["name"], "ci-audit")
+        self.assertTrue(run["results"])
+        for result in run["results"]:
+            self.assertIn(result["ruleId"], ci_audit.RULES)
+            self.assertIn(result["level"], ("error", "warning", "note"))
+            self.assertTrue(result["message"]["text"])
+            location = result["locations"][0]["physicalLocation"]
+            self.assertTrue(location["artifactLocation"]["uri"].endswith(".github/workflows/ci.yml"))
+            self.assertIsInstance(location["region"]["startLine"], int)
+
+    def test_sarif_rules_array_covers_all_rules(self):
+        rules = self.run_sarif()["runs"][0]["tool"]["driver"]["rules"]
+        self.assertEqual({r["id"] for r in rules}, set(ci_audit.RULES))
+        levels = {r["id"]: r["defaultConfiguration"]["level"] for r in rules}
+        self.assertEqual(levels["unpinned-action"], "error")
+        self.assertEqual(levels["missing-permissions"], "warning")
+        self.assertEqual(levels["secret-in-env"], "note")
+
+    def test_sarif_zero_findings_still_valid(self):
+        parsed = self.run_sarif(CLEAN_WORKFLOW)
+        self.assertEqual(parsed["version"], "2.1.0")
+        self.assertEqual(parsed["runs"][0]["results"], [])
+
+    def test_text_format_unchanged_by_default(self):
+        self.write_workflow(BAD_WORKFLOW)
+        default_out = io.StringIO()
+        with contextlib.redirect_stdout(default_out):
+            ci_audit.main([str(self.root)])
+        explicit_out = io.StringIO()
+        with contextlib.redirect_stdout(explicit_out):
+            ci_audit.main([str(self.root), "--format", "text"])
+        self.assertEqual(default_out.getvalue(), explicit_out.getvalue())
+        self.assertIn("finding(s) across", default_out.getvalue())
+
+    def test_sarif_output_is_valid_and_complete(self):
+        self.write_workflow(BAD_WORKFLOW)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ci_audit.main([str(self.root), "--format", "sarif"])
+        sarif = json.loads(out.getvalue())
+        self.assertEqual(sarif["version"], "2.1.0")
+        run = sarif["runs"][0]
+        self.assertEqual(run["tool"]["driver"]["name"], "ci-audit")
+        self.assertEqual({r["id"] for r in run["tool"]["driver"]["rules"]}, set(ci_audit.RULES))
+        self.assertTrue(any(r["ruleId"] == "unpinned-action" for r in run["results"]))
+        self.assertEqual(run["results"][0]["level"], "error")
+        region = run["results"][0]["locations"][0]["physicalLocation"]["region"]
+        self.assertIn("startLine", region)
+
+    def test_sarif_zero_findings_is_valid(self):
+        self.write_workflow(CLEAN_WORKFLOW)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ci_audit.main([str(self.root), "--format", "sarif"])
+        sarif = json.loads(out.getvalue())
+        self.assertEqual(sarif["runs"][0]["results"], [])
+
+    def test_text_format_unchanged(self):
+        self.write_workflow(BAD_WORKFLOW)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ci_audit.main([str(self.root)])
+        self.assertIn("[unpinned-action]", out.getvalue())
 
     def test_event_interpolation_outside_run_block_not_flagged(self):
         workflow = CLEAN_WORKFLOW.replace(
