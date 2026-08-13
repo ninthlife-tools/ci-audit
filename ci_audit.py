@@ -51,7 +51,9 @@ RULES = {
 USES_RE = re.compile(r"^\s*-?\s*uses:\s*(\S+)")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 RUN_RE = re.compile(r"^(\s*)-?\s*run:\s*[|>]?")
-EVENT_INJECT_RE = re.compile(r"\$\{\{\s*github\.event\.")
+EVENT_INJECT_RE = re.compile(r"\$\{\{\s*github\.event\.([\w.\[\]]+)")
+# numeric event fields are not attacker-controlled text (e.g. pull_request.number)
+NUMERIC_EVENT_FIELDS = (".number", ".id", ".run_id", ".run_attempt", ".run_number")
 CURL_BASH_RE = re.compile(r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba)?sh\b")
 SECRET_ENV_RE = re.compile(
     r"(?i)^\s*(?:[A-Z0-9_]*(?:key|secret|token|password)[A-Z0-9_]*)\s*:\s*[\"'][^\"'\s]{12,}[\"']\s*$"
@@ -67,15 +69,19 @@ def iter_workflow_files(target: Path):
         yield target
     elif target.is_dir():
         workflows = target / ".github" / "workflows"
-        base = workflows if workflows.is_dir() else target
-        yield from sorted(p for p in base.rglob("*") if is_workflow_file(p))
+        if workflows.is_dir():
+            yield from sorted(p for p in workflows.rglob("*") if is_workflow_file(p))
+        elif not (target / ".git").exists() and not (target / ".github").exists():
+            # plain directory of workflow files; a repo root without
+            # .github/workflows has no workflows — don't scan every YAML in it
+            yield from sorted(p for p in target.rglob("*") if is_workflow_file(p))
 
 
 def check_uses_line(line: str) -> bool:
     match = USES_RE.match(line)
     if not match:
         return False
-    ref = match.group(1)
+    ref = match.group(1).strip("'\"")
     if ref.startswith("./") or ref.startswith("docker://"):
         return False
     if "@" not in ref:
@@ -103,8 +109,11 @@ def scan_workflow(path: Path) -> list:
             findings.append(make_finding(path, lineno, "unpinned-action"))
         if re.match(r"^\s*pull_request_target\s*:", line):
             findings.append(make_finding(path, lineno, "pull-request-target"))
-        if in_run_block and EVENT_INJECT_RE.search(line):
-            findings.append(make_finding(path, lineno, "script-injection-risk"))
+        if in_run_block:
+            for event_match in EVENT_INJECT_RE.finditer(line):
+                if not event_match.group(1).endswith(NUMERIC_EVENT_FIELDS):
+                    findings.append(make_finding(path, lineno, "script-injection-risk"))
+                    break
         if CURL_BASH_RE.search(line):
             findings.append(make_finding(path, lineno, "curl-bash"))
         if SECRET_ENV_RE.match(line) and "${{" not in line:

@@ -132,6 +132,40 @@ class CiAuditTest(unittest.TestCase):
         rules = {f["rule"] for f in self.scan(workflow)}
         self.assertNotIn("script-injection-risk", rules)
 
+    def test_quoted_local_action_not_flagged(self):
+        workflow = CLEAN_WORKFLOW.replace(
+            "- uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8",
+            "- uses: './.github/actions/local'",
+        )
+        rules = {f["rule"] for f in self.scan(workflow)}
+        self.assertNotIn("unpinned-action", rules)
+
+    def test_quoted_unpinned_action_still_flagged(self):
+        workflow = CLEAN_WORKFLOW.replace(
+            "- uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8",
+            "- uses: 'actions/checkout@v4'",
+        )
+        rules = {f["rule"] for f in self.scan(workflow)}
+        self.assertIn("unpinned-action", rules)
+
+    def test_numeric_event_field_not_flagged(self):
+        workflow = CLEAN_WORKFLOW.replace(
+            "run: python3 -m unittest",
+            'run: echo "${{ github.event.pull_request.number }}" >> pr-info.txt',
+        )
+        rules = {f["rule"] for f in self.scan(workflow)}
+        self.assertNotIn("script-injection-risk", rules)
+
+    def test_repo_root_without_workflows_scans_nothing(self):
+        (self.root / ".git").mkdir()
+        (self.root / "config").mkdir()
+        (self.root / "config" / "deploy.yaml").write_text("key: value\n")
+        self.assertEqual(list(ci_audit.iter_workflow_files(self.root)), [])
+
+    def test_plain_dir_of_yamls_still_scanned(self):
+        (self.root / "ci.yml").write_text(CLEAN_WORKFLOW)
+        self.assertEqual(len(list(ci_audit.iter_workflow_files(self.root))), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
